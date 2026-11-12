@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Leaf Classifier Live</title>
+  <!-- ONNX Runtime Web from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
+  <!-- QRCode.js for in-browser client-side QR generation -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --card-border: #30363d;
+      --text: #f0f6fc;
+      --text-muted: #8b949e;
+      --accent: #2ea043;
+      --accent-glow: rgba(46, 160, 67, 0.25);
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    header {
+      text-align: center;
+      padding: 8px 0;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .subtitle {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Status badge */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      margin-bottom: 8px;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #e3b341;
+      display: inline-block;
+    }
+
+    .dot.ready { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+    .dot.error { background: #f85149; }
+
+    /* Viewport / Camera Card */
+    .viewfinder-card {
+      position: relative;
+      overflow: hidden;
+      padding: 0;
+    }
+
+    .viewport {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      background: #010409;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      border-radius: 14px 14px 0 0;
+    }
+
+    video, #previewImg {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    #previewImg {
+      display: none;
+    }
+
+    /* Central square crop indicator overlay */
+    .crop-overlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 70%;
+      height: 70%;
+      border: 2px dashed rgba(255, 255, 255, 0.7);
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4);
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+    }
+
+    .crop-overlay::after {
+      content: "Central Crop (96x96)";
+      position: absolute;
+      bottom: 8px;
+      font-size: 0.7rem;
+      color: rgba(255, 255, 255, 0.85);
+      background: rgba(0, 0, 0, 0.6);
+      padding: 2px 6px;
+      border-radius: 4px;
+      letter-spacing: 0.5px;
+    }
+
+    /* Reticle corner markers */
+    .corner {
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      border-color: #58a6ff;
+      border-style: solid;
+    }
+    .corner.tl { top: -2px; left: -2px; border-width: 3px 0 0 3px; border-top-left-radius: 4px; }
+    .corner.tr { top: -2px; right: -2px; border-width: 3px 3px 0 0; border-top-right-radius: 4px; }
+    .corner.bl { bottom: -2px; left: -2px; border-width: 0 0 3px 3px; border-bottom-left-radius: 4px; }
+    .corner.br { bottom: -2px; right: -2px; border-width: 0 3px 3px 0; border-bottom-right-radius: 4px; }
+
+    /* Controls bar */
+    .viewport-controls {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+      background: var(--card-bg);
+      border-top: 1px solid var(--card-border);
+      flex-wrap: wrap;
+    }
+
+    button, .btn {
+      flex: 1;
+      min-width: 110px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px 14px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text);
+      background: #21262d;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.15s, border-color 0.15s, transform 0.05s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    button:hover, .btn:hover {
+      background: #30363d;
+      border-color: #8b949e;
+    }
+
+    button:active, .btn:active {
+      transform: scale(0.98);
+    }
+
+    button.primary, .btn.primary {
+      background: var(--accent);
+      border-color: #238636;
+      color: #fff;
+    }
+
+    button.primary:hover {
+      background: #2ea043;
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+
+    /* Predictions section */
+    .prediction-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .prediction-title {
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .winner-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: var(--accent-glow);
+      border: 1px solid var(--accent);
+      color: #56d364;
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: capitalize;
+    }
+
+    .class-row {
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 12px;
+      gap: 4px;
+    }
+
+    .class-info {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .class-name {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      text-transform: capitalize;
+    }
+
+    .class-prob {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-weight: 600;
+    }
+
+    .progress-bar-bg {
+      width: 100%;
+      height: 10px;
+      background: #21262d;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: #58a6ff;
+      border-radius: 6px;
+      transition: width 0.1s ease-out, background-color 0.2s;
+    }
+
+    .class-row.winner .progress-bar-fill {
+      background: var(--accent);
+    }
+
+    .class-row.winner .class-name {
+      color: #56d364;
+      font-weight: 700;
+    }
+
+    /* Fallback and test actions */
+    .fallback-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .fallback-title {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* Check verification report */
+    #verificationBox {
+      display: none;
+      background: #0d1117;
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 0.8rem;
+      margin-top: 8px;
+    }
+
+    #verificationBox table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 6px;
+    }
+
+    #verificationBox th, #verificationBox td {
+      padding: 4px 6px;
+      text-align: left;
+      border-bottom: 1px solid #21262d;
+    }
+
+    #verificationBox th {
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .pass-tag {
+      display: inline-block;
+      padding: 2px 6px;
+      background: rgba(46, 160, 67, 0.2);
+      border: 1px solid var(--accent);
+      color: #56d364;
+      border-radius: 4px;
+      font-weight: 700;
+    }
+
+    /* QR Code Card at Bottom */
+    .qr-card {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px;
+      border: 1px solid #30363d;
+      background: #161b22;
+      border-radius: 14px;
+    }
+
+    .qr-frame {
+      background: #ffffff;
+      padding: 8px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 128px;
+      height: 128px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    }
+
+    .qr-frame img, .qr-frame canvas {
+      width: 112px !important;
+      height: 112px !important;
+      display: block;
+    }
+
+    .qr-details {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .qr-label {
+      font-size: 0.95rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #f0f6fc;
+    }
+
+    .qr-desc {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      line-height: 1.35;
+    }
+
+    .qr-link {
+      font-size: 0.8rem;
+      color: #58a6ff;
+      word-break: break-all;
+      text-decoration: none;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .qr-link:hover {
+      text-decoration: underline;
+    }
+
+    /* Hidden elements */
+    #offscreenCanvas {
+      display: none;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    /* Mobile adjustments */
+    @media (max-width: 480px) {
+      body { padding: 10px; }
+      .qr-card { flex-direction: column; text-align: center; }
+      .qr-link { justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🌿 Leaf Classifier</h1>
+      <div class="subtitle">Real-time on-device classification via ONNX Runtime Web</div>
+    </header>
+
+    <!-- Camera / Viewport Card -->
+    <div class="card viewfinder-card">
+      <div class="status-bar" style="padding: 10px 14px 4px 14px;">
+        <div class="status-indicator">
+          <span class="dot" id="modelDot"></span>
+          <span id="statusText">Initializing model...</span>
+        </div>
+        <div id="fpsText" style="color: var(--text-muted); font-size: 0.75rem;">-- FPS</div>
+      </div>
+
+      <div class="viewport" id="viewport">
+        <!-- Video element for phone camera (playsinline and muted are mandatory for Safari iOS) -->
+        <video id="video" playsinline webkit-playsinline autoplay muted></video>
+        <img id="previewImg" alt="Upload preview">
+        
+        <!-- Framing overlay showing the exact central square crop for 96x96 input -->
+        <div class="crop-overlay" id="cropOverlay">
+          <span class="corner tl"></span>
+          <span class="corner tr"></span>
+          <span class="corner bl"></span>
+          <span class="corner br"></span>
+        </div>
+      </div>
+
+      <div class="viewport-controls">
+        <button id="cameraToggleBtn" class="primary">
+          <span id="camBtnIcon">📷</span> <span id="camBtnText">Start Camera</span>
+        </button>
+        <button id="switchCamBtn" title="Switch rear / front camera">
+          🔄 Switch Cam
+        </button>
+        <label for="fileInput" class="btn">
+          📁 Upload Photo
+        </label>
+        <input type="file" id="fileInput" accept="image/*">
+      </div>
+    </div>
+
+    <!-- Predictions Card -->
+    <div class="card">
+      <div class="prediction-header">
+        <div class="prediction-title">Class Probabilities</div>
+        <div class="winner-badge" id="winnerBadge">Waiting for input...</div>
+      </div>
+
+      <div id="classesContainer">
+        <!-- Rows dynamically injected / updated -->
+      </div>
+    </div>
+
+    <!-- Fallback & Self-Check Card -->
+    <div class="card fallback-section">
+      <div class="fallback-title">Photo Fallback &amp; Self-Check</div>
+      <p style="font-size: 0.8rem; color: var(--text-muted);">
+        If camera is unavailable or to verify model accuracy against <code>check_expected.json</code>:
+      </p>
+      <div class="button-group">
+        <button id="runCheckBtn" class="primary">
+          🧪 Test with check_image.jpg
+        </button>
+        <button id="resumeCamBtn" style="display: none;">
+          📹 Return to Live Camera
+        </button>
+      </div>
+
+      <div id="verificationBox">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <strong id="verificationTitle">Self-Check Report</strong>
+          <span id="verificationBadge" class="pass-tag">PASSED</span>
+        </div>
+        <div id="verificationSummary" style="color: var(--text-muted); font-size: 0.75rem; margin-bottom: 6px;"></div>
+        <div style="overflow-x:auto;">
+          <table id="verificationTable">
+            <thead>
+              <tr>
+                <th>Class</th>
+                <th>Calculated</th>
+                <th>Expected</th>
+                <th>Diff</th>
+              </tr>
+            </thead>
+            <tbody id="verificationBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Clearly labelled QR Code Card at Bottom -->
+    <div class="qr-card">
+      <div class="qr-frame" id="qrcodeContainer">
+        <!-- Rendered QR Code canvas/image pointing to live deployed GitHub Pages -->
+        <img id="qrImg" src="qr_code.png" alt="QR Code for https://kovarpetr.github.io/mlr-ex08/" width="112" height="112">
+      </div>
+      <div class="qr-details">
+        <div class="qr-label">
+          📱 Scan with Phone
+        </div>
+        <div class="qr-desc">
+          Scan this QR code to open this leaf classifier live on your phone camera:
+        </div>
+        <a id="publicAppUrl" class="qr-link" href="https://kovarpetr.github.io/mlr-ex08/" target="_blank" rel="noopener">
+          https://kovarpetr.github.io/mlr-ex08/ ↗
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Offscreen canvas for cropping and resizing to 96x96 -->
+  <canvas id="offscreenCanvas" width="96" height="96"></canvas>
+
+  <script>
+    // Configuration exactly as specified in model_info.json
+    const MODEL_INFO = {
+      classes: ["apple", "cherry", "chestnut", "maple"],
+      input_size: 96,
+      mean: [0.485, 0.456, 0.406],
+      std: [0.229, 0.224, 0.225]
+    };
+
+    // Expected check probabilities from check_expected.json
+    const CHECK_EXPECTED = {
+      "apple": 0.45783141255378723,
+      "cherry": 0.5200164318084717,
+      "chestnut": 0.0013820307794958353,
+      "maple": 0.02077011950314045
+    };
+
+    const EMOJIS = {
+      apple: "🍏",
+      cherry: "🍒",
+      chestnut: "🌰",
+      maple: "🍁"
+    };
+
+    const PUBLIC_URL = "https://kovarpetr.github.io/mlr-ex08/";
+
+    // DOM Elements
+    const video = document.getElementById('video');
+    const previewImg = document.getElementById('previewImg');
+    const cropOverlay = document.getElementById('cropOverlay');
+    const modelDot = document.getElementById('modelDot');
+    const statusText = document.getElementById('statusText');
+    const fpsText = document.getElementById('fpsText');
+    const winnerBadge = document.getElementById('winnerBadge');
+    const classesContainer = document.getElementById('classesContainer');
+    const cameraToggleBtn = document.getElementById('cameraToggleBtn');
+    const camBtnText = document.getElementById('camBtnText');
+    const switchCamBtn = document.getElementById('switchCamBtn');
+    const fileInput = document.getElementById('fileInput');
+    const runCheckBtn = document.getElementById('runCheckBtn');
+    const resumeCamBtn = document.getElementById('resumeCamBtn');
+    const verificationBox = document.getElementById('verificationBox');
+    const verificationBody = document.getElementById('verificationBody');
+    const verificationBadge = document.getElementById('verificationBadge');
+    const verificationSummary = document.getElementById('verificationSummary');
+    const offscreenCanvas = document.getElementById('offscreenCanvas');
+    const offCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+
+    let session = null;
+    let stream = null;
+    let cameraActive = false;
+    let isProcessing = false;
+    let currentFacingMode = 'environment'; // Rear camera on iPhone / Android
+    let lastFrameTime = performance.now();
+    let frameCount = 0;
+    let lastFpsUpdate = performance.now();
+
+    // 1. Build Class Rows UI
+    function buildClassRows() {
+      classesContainer.innerHTML = '';
+      MODEL_INFO.classes.forEach(cls => {
+        const row = document.createElement('div');
+        row.className = 'class-row';
+        row.id = `row-${cls}`;
+        row.innerHTML = `
+          <div class="class-info">
+            <span class="class-name">
+              <span>${EMOJIS[cls] || '🌿'}</span>
+              <span>${cls}</span>
+            </span>
+            <span class="class-prob" id="prob-${cls}">0.0% (0.0000)</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="bar-${cls}"></div>
+          </div>
+        `;
+        classesContainer.appendChild(row);
+      });
+    }
+
+    // 2. Update Prediction UI
+    function updateProbabilities(probs) {
+      let maxIdx = 0;
+      let maxProb = -1;
+
+      for (let i = 0; i < probs.length; i++) {
+        if (probs[i] > maxProb) {
+          maxProb = probs[i];
+          maxIdx = i;
+        }
+      }
+
+      MODEL_INFO.classes.forEach((cls, idx) => {
+        const prob = probs[idx];
+        const pct = (prob * 100).toFixed(1);
+        const raw = prob.toFixed(4);
+
+        const probElem = document.getElementById(`prob-${cls}`);
+        const barElem = document.getElementById(`bar-${cls}`);
+        const rowElem = document.getElementById(`row-${cls}`);
+
+        if (probElem) probElem.textContent = `${pct}% (${raw})`;
+        if (barElem) barElem.style.width = `${Math.min(100, Math.max(0, prob * 100))}%`;
+
+        if (rowElem) {
+          if (idx === maxIdx && maxProb > 0.01) {
+            rowElem.classList.add('winner');
+          } else {
+            rowElem.classList.remove('winner');
+          }
+        }
+      });
+
+      const topClass = MODEL_INFO.classes[maxIdx];
+      const topPct = (maxProb * 100).toFixed(1);
+      winnerBadge.innerHTML = `${EMOJIS[topClass] || '🌿'} ${topClass} (${topPct}%)`;
+    }
+
+    // 3. Central square crop & standardization (Follows model_info.json exactly)
+    function preprocessFrame(sourceElement) {
+      const srcW = sourceElement.videoWidth || sourceElement.naturalWidth || sourceElement.width;
+      const srcH = sourceElement.videoHeight || sourceElement.naturalHeight || sourceElement.height;
+      if (!srcW || !srcH) return null;
+
+      // Crop the central square of the frame
+      const side = Math.min(srcW, srcH);
+      const sx = (srcW - side) / 2;
+      const sy = (srcH - side) / 2;
+
+      // Resize it to input size (96x96)
+      const inputSize = MODEL_INFO.input_size;
+      offscreenCanvas.width = inputSize;
+      offscreenCanvas.height = inputSize;
+
+      offCtx.drawImage(sourceElement, sx, sy, side, side, 0, 0, inputSize, inputSize);
+      const imgData = offCtx.getImageData(0, 0, inputSize, inputSize);
+      const pixels = imgData.data;
+
+      // Scale RGB pixels to 0–1, standardize each channel with mean/std, input shape 1×3×size×size
+      const numPixels = inputSize * inputSize;
+      const tensorData = new Float32Array(3 * numPixels);
+      const mean = MODEL_INFO.mean;
+      const std = MODEL_INFO.std;
+
+      for (let i = 0; i < numPixels; i++) {
+        const r = pixels[i * 4 + 0] / 255.0;
+        const g = pixels[i * 4 + 1] / 255.0;
+        const b = pixels[i * 4 + 2] / 255.0;
+
+        // Planar NCHW layout: [1, 3, 96, 96]
+        tensorData[i] = (r - mean[0]) / std[0];                   // R channel
+        tensorData[numPixels + i] = (g - mean[1]) / std[1];       // G channel
+        tensorData[numPixels * 2 + i] = (b - mean[2]) / std[2];   // B channel
+      }
+
+      return new ort.Tensor('float32', tensorData, [1, 3, inputSize, inputSize]);
+    }
+
+    // 4. Softmax function
+    function softmax(logits) {
+      let maxVal = -Infinity;
+      for (let i = 0; i < logits.length; i++) {
+        if (logits[i] > maxVal) maxVal = logits[i];
+      }
+      let sumExp = 0;
+      const exps = new Float32Array(logits.length);
+      for (let i = 0; i < logits.length; i++) {
+        exps[i] = Math.exp(logits[i] - maxVal);
+        sumExp += exps[i];
+      }
+      const probs = new Float32Array(logits.length);
+      for (let i = 0; i < logits.length; i++) {
+        probs[i] = exps[i] / sumExp;
+      }
+      return probs;
+    }
+
+    // 5. Run inference on a source (video or image)
+    async function classify(sourceElement) {
+      if (!session) return null;
+      const tensor = preprocessFrame(sourceElement);
+      if (!tensor) return null;
+
+      const inputName = session.inputNames[0]; // 'image'
+      const outputName = session.outputNames[0]; // 'logits'
+
+      const feeds = {};
+      feeds[inputName] = tensor;
+
+      const results = await session.run(feeds);
+      const logits = results[outputName].data;
+      const probs = softmax(logits);
+
+      updateProbabilities(probs);
+      return probs;
+    }
+
+    // 6. Continuous live camera loop
+    async function runCameraLoop() {
+      if (!cameraActive) return;
+
+      if (!isProcessing && video.readyState >= 2 && video.videoWidth > 0) {
+        isProcessing = true;
+        try {
+          await classify(video);
+
+          // Update FPS counter
+          frameCount++;
+          const now = performance.now();
+          if (now - lastFpsUpdate >= 500) {
+            const fps = ((frameCount * 1000) / (now - lastFpsUpdate)).toFixed(1);
+            fpsText.textContent = `${fps} FPS`;
+            frameCount = 0;
+            lastFpsUpdate = now;
+          }
+        } catch (err) {
+          console.error("Inference loop error:", err);
+        } finally {
+          isProcessing = false;
+        }
+      }
+
+      if (cameraActive) {
+        requestAnimationFrame(runCameraLoop);
+      }
+    }
+
+    // 7. Start / Stop Camera with Safari iOS compatibility
+    async function startCamera() {
+      try {
+        statusText.textContent = "Requesting rear camera...";
+        if (stream) {
+          stream.getTracks().forEach(t => t.stop());
+        }
+
+        // Ideal rear camera for iPhone and Android
+        const constraints = {
+          video: {
+            facingMode: { ideal: currentFacingMode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        };
+
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (mediaErr) {
+          console.warn("FacingMode constraint failed, falling back to any camera:", mediaErr);
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        }
+
+        video.srcObject = stream;
+        video.style.display = 'block';
+        previewImg.style.display = 'none';
+        cropOverlay.style.display = 'flex';
+        resumeCamBtn.style.display = 'none';
+
+        // Wait for video to be ready (critical for Safari iOS)
+        await new Promise((resolve) => {
+          if (video.readyState >= 2 && video.videoWidth > 0) {
+            resolve();
+          } else {
+            video.onloadedmetadata = () => resolve();
+          }
+        });
+
+        await video.play();
+
+        cameraActive = true;
+        camBtnText.textContent = "Pause Camera";
+        statusText.textContent = "Live camera classifying";
+        modelDot.className = "dot ready";
+
+        requestAnimationFrame(runCameraLoop);
+      } catch (err) {
+        console.error("Camera access error:", err);
+        statusText.textContent = "Camera error: " + (err.message || "permission denied");
+        modelDot.className = "dot error";
+        cameraActive = false;
+        camBtnText.textContent = "Start Camera";
+      }
+    }
+
+    function stopCamera() {
+      cameraActive = false;
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+      camBtnText.textContent = "Start Camera";
+      fpsText.textContent = "-- FPS";
+    }
+
+    cameraToggleBtn.addEventListener('click', () => {
+      if (cameraActive) {
+        stopCamera();
+        statusText.textContent = "Camera paused";
+      } else {
+        startCamera();
+      }
+    });
+
+    switchCamBtn.addEventListener('click', () => {
+      currentFacingMode = (currentFacingMode === 'environment') ? 'user' : 'environment';
+      if (cameraActive) {
+        startCamera();
+      }
+    });
+
+    // 8. Photo Upload Fallback
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      stopCamera();
+      const reader = new FileReader();
+      reader.onload = (loadEvt) => {
+        previewImg.onload = async () => {
+          video.style.display = 'none';
+          previewImg.style.display = 'block';
+          cropOverlay.style.display = 'flex';
+          resumeCamBtn.style.display = 'inline-flex';
+          statusText.textContent = `Classifying uploaded: ${file.name}`;
+
+          try {
+            await classify(previewImg);
+          } catch (err) {
+            console.error("Photo inference error:", err);
+            statusText.textContent = "Inference failed: " + err.message;
+          }
+        };
+        previewImg.src = loadEvt.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    resumeCamBtn.addEventListener('click', () => {
+      startCamera();
+    });
+
+    // 9. Self-Check with check_image.jpg & check_expected.json
+    runCheckBtn.addEventListener('click', async () => {
+      try {
+        statusText.textContent = "Running check on check_image.jpg...";
+        stopCamera();
+
+        const img = new Image();
+        img.onload = async () => {
+          video.style.display = 'none';
+          previewImg.src = img.src;
+          previewImg.style.display = 'block';
+          cropOverlay.style.display = 'flex';
+          resumeCamBtn.style.display = 'inline-flex';
+
+          const probs = await classify(img);
+          if (!probs) return;
+
+          // Compare with expected
+          let maxDiff = 0;
+          verificationBody.innerHTML = '';
+
+          MODEL_INFO.classes.forEach((cls, idx) => {
+            const calc = probs[idx];
+            const exp = CHECK_EXPECTED[cls];
+            const diff = Math.abs(calc - exp);
+            if (diff > maxDiff) maxDiff = diff;
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td><strong>${EMOJIS[cls] || ''} ${cls}</strong></td>
+              <td>${calc.toFixed(6)}</td>
+              <td>${exp.toFixed(6)}</td>
+              <td style="color: ${diff < 0.0001 ? '#56d364' : '#f85149'}">${diff.toExponential(2)}</td>
+            `;
+            verificationBody.appendChild(tr);
+          });
+
+          verificationBox.style.display = 'block';
+          const passed = maxDiff < 0.001;
+          verificationBadge.textContent = passed ? "PASSED" : "FAILED";
+          verificationBadge.style.color = passed ? "#56d364" : "#f85149";
+          verificationBadge.style.borderColor = passed ? "var(--accent)" : "#f85149";
+          verificationSummary.textContent = `Max absolute difference: ${maxDiff.toExponential(4)} (Threshold: 0.001)`;
+          statusText.textContent = passed ? "Self-Check Passed! check_image.jpg matches expected" : "Self-Check completed with differences";
+        };
+        img.src = 'check_image.jpg?' + Date.now();
+      } catch (err) {
+        console.error("Check execution error:", err);
+        statusText.textContent = "Self-check error: " + err.message;
+      }
+    });
+
+    // 10. Generate QR Code in Browser (No external service)
+    function renderQRCode() {
+      const qrCanvas = document.getElementById('qrCanvas');
+      const container = document.getElementById('qrcodeContainer');
+
+      // Attempt browser-side generation via qrcodejs if loaded
+      if (typeof QRCode !== 'undefined') {
+        container.innerHTML = '';
+        new QRCode(container, {
+          text: PUBLIC_URL,
+          width: 112,
+          height: 112,
+          colorDark: "#111827",
+          colorLight: "#ffffff",
+          correctLevel: QRCode.CorrectLevel.H
+        });
+      } else {
+        // Fallback: use locally generated qr_code.png
+        container.innerHTML = `<img src="qr_code.png" alt="QR Code" width="112" height="112">`;
+      }
+    }
+
+    // 11. Initialize Model
+    async function initModel() {
+      buildClassRows();
+      renderQRCode();
+
+      try {
+        statusText.textContent = "Loading leaf_model.onnx...";
+        modelDot.className = "dot";
+
+        // Configure onnxruntime-web for Safari iOS & cross-platform stability
+        if (window.ort) {
+          ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/';
+          ort.env.wasm.numThreads = 1;
+        }
+
+        // Create inference session with WebAssembly provider
+        session = await ort.InferenceSession.create('./leaf_model.onnx', {
+          executionProviders: ['wasm']
+        });
+
+        statusText.textContent = "Model ready! Tap 'Start Camera'";
+        modelDot.className = "dot ready";
+
+        // Try automatically starting camera if permissions allow
+        startCamera().catch(err => {
+          console.log("Autoplay camera delayed until user tap:", err);
+        });
+
+      } catch (err) {
+        console.error("Model initialization failed:", err);
+        statusText.textContent = "Failed to load model: " + err.message;
+        modelDot.className = "dot error";
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', initModel);
+  </script>
+</body>
+</html>

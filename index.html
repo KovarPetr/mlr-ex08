@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Leaf Classifier Live</title>
-  <!-- ONNX Runtime Web from CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
+  <!-- ONNX Runtime Web from CDN (1.18.0 contains all standalone wasm binaries for mobile) -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"></script>
   <!-- QRCode.js for in-browser client-side QR generation -->
   <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
   <style>
@@ -788,43 +788,54 @@
       }
     }
 
-    // 7. Start / Stop Camera with Safari iOS compatibility
-    async function startCamera() {
+    // 7. Start / Stop Camera with Safari iOS & Android Brave compatibility
+    async function startCamera(isUserAction = false) {
       try {
-        statusText.textContent = "Requesting rear camera...";
+        statusText.textContent = "Starting rear camera...";
         if (stream) {
           stream.getTracks().forEach(t => t.stop());
         }
 
-        // Ideal rear camera for iPhone and Android
-        const constraints = {
-          video: {
-            facingMode: { ideal: currentFacingMode },
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          },
-          audio: false
-        };
+        // Flexible constraints for iOS Safari & Android Brave/Chrome
+        const constraintsList = [
+          { video: { facingMode: { ideal: currentFacingMode } }, audio: false },
+          { video: { facingMode: currentFacingMode }, audio: false },
+          { video: true, audio: false }
+        ];
 
-        try {
-          stream = await navigator.mediaDevices.getUserMedia(constraints);
-        } catch (mediaErr) {
-          console.warn("FacingMode constraint failed, falling back to any camera:", mediaErr);
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        let lastErr = null;
+        for (const constraints of constraintsList) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            if (stream) break;
+          } catch (e) {
+            lastErr = e;
+          }
         }
 
+        if (!stream) {
+          throw lastErr || new Error("Unable to access camera");
+        }
+
+        video.muted = true;
+        video.playsInline = true;
+        video.setAttribute('muted', '');
+        video.setAttribute('playsinline', '');
+        video.setAttribute('webkit-playsinline', '');
         video.srcObject = stream;
         video.style.display = 'block';
         previewImg.style.display = 'none';
         cropOverlay.style.display = 'flex';
         resumeCamBtn.style.display = 'none';
 
-        // Wait for video to be ready (critical for Safari iOS)
+        // Wait for video stream dimensions (critical for iOS Safari & mobile Chrome/Brave)
         await new Promise((resolve) => {
           if (video.readyState >= 2 && video.videoWidth > 0) {
             resolve();
           } else {
             video.onloadedmetadata = () => resolve();
+            // Safety timeout after 1.5s
+            setTimeout(resolve, 1500);
           }
         });
 
@@ -837,11 +848,18 @@
 
         requestAnimationFrame(runCameraLoop);
       } catch (err) {
-        console.error("Camera access error:", err);
-        statusText.textContent = "Camera error: " + (err.message || "permission denied");
-        modelDot.className = "dot error";
+        console.warn("Camera access error:", err);
         cameraActive = false;
         camBtnText.textContent = "Start Camera";
+
+        if (isUserAction) {
+          statusText.textContent = "Camera access denied. Please allow camera in Brave site settings (shield/lock icon) or use 'Upload Photo'.";
+          modelDot.className = "dot error";
+        } else {
+          // Silent on initial load before user interaction
+          statusText.textContent = "Model ready! Tap 'Start Camera' below";
+          modelDot.className = "dot ready";
+        }
       }
     }
 
@@ -860,14 +878,14 @@
         stopCamera();
         statusText.textContent = "Camera paused";
       } else {
-        startCamera();
+        startCamera(true);
       }
     });
 
     switchCamBtn.addEventListener('click', () => {
       currentFacingMode = (currentFacingMode === 'environment') ? 'user' : 'environment';
       if (cameraActive) {
-        startCamera();
+        startCamera(true);
       }
     });
 
@@ -985,28 +1003,38 @@
         statusText.textContent = "Loading leaf_model.onnx...";
         modelDot.className = "dot";
 
-        // Configure onnxruntime-web for Safari iOS & cross-platform stability
+        // Configure onnxruntime-web for Safari iOS & Android Brave
         if (window.ort) {
-          ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/';
+          ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
           ort.env.wasm.numThreads = 1;
         }
 
-        // Create inference session with WebAssembly provider
-        session = await ort.InferenceSession.create('./leaf_model.onnx', {
-          executionProviders: ['wasm']
-        });
+        // Create inference session with WebAssembly provider & SIMD fallback
+        try {
+          session = await ort.InferenceSession.create('./leaf_model.onnx', {
+            executionProviders: ['wasm']
+          });
+        } catch (simdErr) {
+          console.warn("WASM session creation with default settings failed, retrying with simd=false:", simdErr);
+          if (window.ort) {
+            ort.env.wasm.simd = false;
+          }
+          session = await ort.InferenceSession.create('./leaf_model.onnx', {
+            executionProviders: ['wasm']
+          });
+        }
 
-        statusText.textContent = "Model ready! Tap 'Start Camera'";
+        statusText.textContent = "Model ready! Tap 'Start Camera' below";
         modelDot.className = "dot ready";
 
-        // Try automatically starting camera if permissions allow
-        startCamera().catch(err => {
+        // Attempt silent autoplay camera only if permitted
+        startCamera(false).catch(err => {
           console.log("Autoplay camera delayed until user tap:", err);
         });
 
       } catch (err) {
         console.error("Model initialization failed:", err);
-        statusText.textContent = "Failed to load model: " + err.message;
+        statusText.textContent = "Failed to load model: " + (err.message || err);
         modelDot.className = "dot error";
       }
     }
